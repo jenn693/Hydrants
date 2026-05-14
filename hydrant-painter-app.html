@@ -310,6 +310,9 @@ function initApp() {
   }, 200);
 
   if (state.pendingSync && state.pendingSync.length) syncPending();
+
+  // Fetch live painted state from Google Sheet so all painters see same data
+  fetchLiveState();
 }
 
 // ── MARKERS ──
@@ -400,6 +403,55 @@ function undoPainted(id) {
   renderMarkers();
   var h = CITY_HYDRANTS.find(function(x){ return x.id === id; });
   if (h) showDetail(h);
+  // Clear the entry from Google Sheet
+  undoSyncToSheet(id);
+}
+
+function undoSyncToSheet(id) {
+  if (!SCRIPT_URL) return;
+  var url = SCRIPT_URL +
+    '?action=undo' +
+    '&hydrantId=' + encodeURIComponent(id) +
+    '&sheetId='   + encodeURIComponent(SHEET_ID);
+  fetch(url, { mode: 'no-cors' })
+    .then(function() { showSync('\u2713 Undo synced \u2014 entry cleared from Google Sheet', false); })
+    .catch(function() { showSync('\u26a0 Undo saved locally \u2014 will sync when connected', true); });
+}
+
+// ── LIVE STATE FETCH ──
+function fetchLiveState() {
+  if (!SCRIPT_URL) return;
+  var url = SCRIPT_URL + '?action=status&sheetId=' + encodeURIComponent(SHEET_ID);
+  fetch(url)
+    .then(function(res) { return res.json(); })
+    .then(function(data) {
+      if (data.status === 'success' && data.painted && data.painted.length > 0) {
+        var updated = false;
+        data.painted.forEach(function(entry) {
+          if (!state.paintedMap[entry.hydrantId]) {
+            // New painted entry from sheet — add to local state
+            state.paintedMap[entry.hydrantId] = {
+              date:    entry.datePainted,
+              time:    '',
+              painter: entry.painter
+            };
+            updated = true;
+          }
+        });
+        if (updated) {
+          saveState();
+          updateStats();
+          renderMarkers();
+          if (activeRouteNum !== null) {
+            var route = ROUTES.find(function(r){ return r.routeNum === activeRouteNum; });
+            if (route) { renderMarkersWithRoute(route); updateActiveRouteBar(route); }
+          }
+        }
+      }
+    })
+    .catch(function() {
+      // Offline or error — continue with local state
+    });
 }
 
 // ── SYNC ──
